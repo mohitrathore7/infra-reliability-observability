@@ -1,0 +1,170 @@
+# Failure-injection catalogue.
+#
+# steady_state: checks that must all hold before a run starts and that define
+#   "recovered" afterwards. Each check is a PromQL expression returning one
+#   value plus a comparison.
+# scenarios: each one targets a worker node (or a pod), injects a fault,
+#   holds it for `duration_s`, reverts it (if the action is revertible) and
+#   measures time-to-detect and time-to-recover.
+
+defaults:
+  poll_interval_s: 5
+  detect_timeout_s: 420
+  recover_timeout_s: 900
+  stable_polls: 3            # steady state must hold this many polls in a row
+  target_node: infra-reliability-worker-2
+
+steady_state:
+  - name: all_nodes_ready
+    query: 'sum(kube_node_status_condition{condition="Ready",status="true"})'
+    op: "=="
+    value: 4
+  - name: kafka_no_under_replicated
+    query: 'sum(kafka_server_replicamanager_underreplicatedpartitions)'
+    op: "=="
+    value: 0
+  - name: spark_all_workers_alive
+    query: 'max(metrics_master_aliveWorkers_Value)'
+    op: "=="
+    value: 3
+  - name: trino_all_nodes_active
+    query: 'max(trino_metadata_name_DiscoveryNodeManager_ActiveNodeCount)'
+    op: ">="
+    value: 4
+  - name: workload_pods_ready
+    query: >-
+      sum(kube_pod_status_ready{condition="false",namespace=~"kafka|spark|trino"}
+      * on (namespace, pod) group_left() (kube_pod_status_phase{phase="Running"} == 1))
+      or vector(0)
+    op: "=="
+    value: 0
+  - name: consumer_lag_bounded
+    query: 'sum(kafka_consumergroup_lag{consumergroup="telemetry-readers"}) or vector(0)'
+    op: "<"
+    value: 50000
+
+scenarios:
+  # ------------------------------------------------------------ node level
+  - id: S01
+    name: worker-node-stop
+    category: node
+    description: Stop the EC2 instance behind a worker node (hard node loss).
+    action: ec2_stop_start
+    duration_s: 300
+    expected_alerts: [NodeNotReady, KafkaUnderReplicatedPartitions, SparkWorkersMissing]
+    runbook: docs/runbooks/node-failures.md#s01-worker-node-stop
+
+  - id: S02
+    name: kubelet-stop
+    category: node
+    description: Stop kubelet on a worker; node goes NotReady while containers keep running.
+    action: systemd_stop_start
+    params: { unit: kubelet }
+    duration_s: 180
+    expected_alerts: [NodeNotReady]
+    runbook: docs/runbooks/node-failures.md#s02-kubelet-stop
+
+  - id: S03
+    name: containerd-restart
+    category: node
+    description: Restart the container runtime on a worker.
+    action: systemd_restart
+    params: { unit: containerd }
+    duration_s: 0
+    expected_alerts: [PodRestartLoop]
+    runbook: docs/runbooks/node-failures.md#s03-containerd-restart
+
+  - id: S04
+    name: node-drain
+    category: node
+    description: Cordon and drain a worker (planned maintenance), then uncordon.
+    action: kubectl_drain_uncordon
+    duration_s: 240
+    expected_alerts: [KafkaUnderReplicatedPartitions]
+    runbook: docs/runbooks/node-failures.md#s04-node-drain
+
+  # --------------------------------------------------------- network level
+  - id: S05
+    name: network-partition
+    category: network
+    description: Drop all intra-VPC traffic to/from one worker (admin SSH stays open).
+    action: iptables_partition
+    params: { cidr: 10.20.0.0/16 }
+    duration_s: 180
+    expected_alerts: [NodeNotReady, KafkaUnderReplicatedPartitions]
+    runbook: docs/runbooks/network-failures.md#s05-network-partition
+
+  - id: S06
+    name: network-latency
+    category: network
+    description: Add 250ms +/- 50ms latency on the worker's primary interface.
+    action: tc_netem
+    params: { interface: ens5, netem: "delay 250ms 50ms distribution normal" }
+    duration_s: 300
+    expected_alerts: [KafkaConsumerLagHigh]
+    runbook: docs/runbooks/network-failures.md#s06-network-latency
+
+  - id: S07
+    name: packet-loss
+    category: network
+    description: Drop 20% of packets on the worker's primary interface.
+    action: tc_netem
+    params: { interface: ens5, netem: "loss 20%" }
+    duration_s: 300
+    expected_alerts: [KafkaUnderReplicatedPartitions, KafkaConsumerLagHigh]
+    runbook: docs/runbooks/network-failures.md#s07-packet-loss
+
+  # ---------------------------------------------------- resource exhaustion
+  - id: S08
+    name: cpu-saturation
+    category: resource
+    description: Saturate every CPU core on a worker with stress-ng.
+    action: stress_ng
+    params: { args: "--cpu 0 --cpu-load 100" }
+    duration_s: 420
+    expected_alerts: [NodeHighCPU]
+    runbook: docs/runbooks/resource-exhaustion.md#s08-cpu-saturation
+
+  - id: S09
+    name: memory-pressure
+    category: resource
+    description: Allocate ~90% of a worker's memory to trigger eviction / OOM behaviour.
+    action: stress_ng
+    params: { args: "--vm 2 --vm-bytes 90% --vm-keep" }
+    duration_s: 240
+    expected_alerts: [NodeMemoryPressure]
+    runbook: docs/runbooks/resource-exhaustion.md#s09-memory-pressure
+
+  - id: S10
+    name: disk-fill
+    category: resource
+    description: Fill 90% of the free space on a worker's root filesystem.
+    action: disk_fill
+    params: { path: /var/tmp/chaos-fill, fraction: 0.9 }
+    duration_s: 240
+    expected_alerts: [NodeDiskAlmostFull]
+    runbook: docs/runbooks/resource-exhaustion.md#s10-disk-fill
+
+  # ------------------------------------------------------- service level
+  - id: S11
+    name: kafka-broker-kill
+    category: service
+    description: Force-delete one Kafka broker pod.
+    action: pod_kill
+    params: { namespace: kafka, selector: "strimzi.io/name=events-kafka" }
+    duration_s: 0
+    expected_alerts: [KafkaUnderReplicatedPartitions]
+    runbook: docs/runbooks/service-failures.md#s11-kafka-broker-kill
+
+  - id: S12
+    name: spark-and-trino-worker-kill
+    category: service
+    description: Force-delete one Spark worker pod and one Trino worker pod at once.
+    action: pod_kill
+    params:
+      targets:
+        - { namespace: spark, selector: "app=spark,component=worker" }
+        - { namespace: trino, selector: "app.kubernetes.io/component=worker" }
+    duration_s: 0
+    expected_alerts: [SparkWorkersMissing, TrinoWorkersMissing]
+    runbook: docs/runbooks/service-failures.md#s12-spark-and-trino-worker-kill

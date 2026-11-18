@@ -1,0 +1,77 @@
+# Values for the official chart: helm repo add trino https://trinodb.github.io/charts
+server:
+  workers: 3
+  config:
+    query:
+      maxMemory: "4GB"
+
+coordinator:
+  jvm:
+    maxHeapSize: "2G"
+  resources:
+    requests: { cpu: 500m, memory: 2560Mi }
+    limits: { memory: 2560Mi }
+
+worker:
+  jvm:
+    maxHeapSize: "2G"
+  resources:
+    requests: { cpu: 500m, memory: 2560Mi }
+    limits: { memory: 2560Mi }
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchLabels:
+                app.kubernetes.io/name: trino
+                app.kubernetes.io/component: worker
+            topologyKey: kubernetes.io/hostname
+
+# tpch for synthetic queries; kafka catalog to query the telemetry topic.
+additionalCatalogs:
+  tpch: |
+    connector.name=tpch
+  kafka: |
+    connector.name=kafka
+    kafka.nodes=events-kafka-bootstrap.kafka.svc:9092
+    kafka.table-names=telemetry
+    kafka.hide-internal-columns=false
+
+jmx:
+  enabled: true
+  registryPort: 9080
+  serverPort: 9081
+  exporter:
+    enabled: true
+    image: bitnami/jmx-exporter:latest
+    port: 5556
+    configProperties: |-
+      hostPort: localhost:9080
+      startDelaySeconds: 0
+      ssl: false
+      lowercaseOutputName: false
+      lowercaseOutputLabelNames: false
+      includeObjectNames:
+        - "trino.execution:name=QueryManager"
+        - "trino.metadata:name=DiscoveryNodeManager"
+        - "trino.memory:type=ClusterMemoryManager,name=ClusterMemoryManager"
+      rules:
+        # trino_execution_name_QueryManager_RunningQueries, ..._FailedQueries_TotalCount
+        - pattern: 'trino.execution<name=QueryManager><>(RunningQueries|QueuedQueries)'
+          name: trino_execution_name_QueryManager_$1
+          type: GAUGE
+        - pattern: 'trino.execution<name=QueryManager><>(FailedQueries|CompletedQueries)\.TotalCount'
+          name: trino_execution_name_QueryManager_$1_TotalCount
+          type: COUNTER
+        # trino_metadata_name_DiscoveryNodeManager_ActiveNodeCount
+        - pattern: 'trino.metadata<name=DiscoveryNodeManager><>ActiveNodeCount'
+          name: trino_metadata_name_DiscoveryNodeManager_ActiveNodeCount
+          type: GAUGE
+
+serviceMonitor:
+  enabled: true
+  labels:
+    release: kube-prometheus-stack
+  interval: 15s

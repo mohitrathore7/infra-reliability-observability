@@ -1,0 +1,28 @@
+# Runs a TPC-H aggregation every minute so query throughput / failure
+# metrics have a baseline.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: trino-tpch-load
+  namespace: trino
+spec:
+  schedule: "* * * * *"
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: trino-cli
+              image: trinodb/trino:449
+              command: ["trino", "--server", "http://trino:8080", "--execute"]
+              args:
+                - >
+                  SELECT l.returnflag, l.linestatus, sum(l.quantity), avg(l.extendedprice), count(*)
+                  FROM tpch.sf1.lineitem l
+                  GROUP BY l.returnflag, l.linestatus
+              resources:
+                requests: { cpu: 100m, memory: 256Mi }
+                limits: { memory: 512Mi }

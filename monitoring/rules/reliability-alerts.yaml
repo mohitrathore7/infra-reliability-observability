@@ -1,0 +1,97 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: reliability-alerts
+  namespace: monitoring
+spec:
+  groups:
+    - name: node.rules
+      rules:
+        - alert: NodeNotReady
+          expr: kube_node_status_condition{condition="Ready",status="true"} == 0
+          for: 1m
+          labels: { severity: critical }
+          annotations:
+            summary: "Node {{ $labels.node }} is NotReady"
+            runbook: docs/runbooks/node-failures.md
+        - alert: NodeHighCPU
+          expr: 100 - (avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 90
+          for: 5m
+          labels: { severity: warning }
+          annotations:
+            summary: "CPU above 90% on {{ $labels.instance }}"
+            runbook: docs/runbooks/resource-exhaustion.md
+        - alert: NodeMemoryPressure
+          expr: (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100 > 90
+          for: 2m
+          labels: { severity: warning }
+          annotations:
+            summary: "Memory above 90% on {{ $labels.instance }}"
+            runbook: docs/runbooks/resource-exhaustion.md
+        - alert: NodeDiskAlmostFull
+          expr: >-
+            (1 - node_filesystem_avail_bytes{mountpoint="/",fstype!~"tmpfs|overlay"}
+            / node_filesystem_size_bytes{mountpoint="/",fstype!~"tmpfs|overlay"}) * 100 > 85
+          for: 2m
+          labels: { severity: warning }
+          annotations:
+            summary: "Root disk above 85% on {{ $labels.instance }}"
+            runbook: docs/runbooks/resource-exhaustion.md
+
+    - name: workload.rules
+      rules:
+        - alert: PodRestartLoop
+          expr: increase(kube_pod_container_status_restarts_total{namespace=~"kafka|spark|trino"}[15m]) > 3
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ $labels.namespace }}/{{ $labels.pod }} restarted >3 times in 15m"
+            runbook: docs/runbooks/service-failures.md
+
+    - name: kafka.rules
+      rules:
+        - alert: KafkaUnderReplicatedPartitions
+          expr: sum(kafka_server_replicamanager_underreplicatedpartitions) > 0
+          for: 1m
+          labels: { severity: critical }
+          annotations:
+            summary: "{{ $value }} Kafka partitions are under-replicated"
+            runbook: docs/runbooks/service-failures.md
+        - alert: KafkaOfflinePartitions
+          expr: sum(kafka_controller_kafkacontroller_offlinepartitionscount) > 0
+          labels: { severity: critical }
+          annotations:
+            summary: "Kafka has offline partitions (data unavailable)"
+            runbook: docs/runbooks/service-failures.md
+        - alert: KafkaConsumerLagHigh
+          expr: sum by (consumergroup) (kafka_consumergroup_lag) > 50000
+          for: 5m
+          labels: { severity: warning }
+          annotations:
+            summary: "Consumer group {{ $labels.consumergroup }} lag is {{ $value }}"
+            runbook: docs/runbooks/network-failures.md
+
+    - name: spark.rules
+      rules:
+        - alert: SparkWorkersMissing
+          expr: max(metrics_master_aliveWorkers_Value) < 3
+          for: 1m
+          labels: { severity: warning }
+          annotations:
+            summary: "Only {{ $value }} of 3 Spark workers are alive"
+            runbook: docs/runbooks/service-failures.md
+
+    - name: trino.rules
+      rules:
+        - alert: TrinoWorkersMissing
+          expr: max(trino_metadata_name_DiscoveryNodeManager_ActiveNodeCount) < 4
+          for: 1m
+          labels: { severity: warning }
+          annotations:
+            summary: "Trino sees {{ $value }} active nodes (expected 4: coordinator + 3 workers)"
+            runbook: docs/runbooks/service-failures.md
+        - alert: TrinoQueryFailures
+          expr: increase(trino_execution_name_QueryManager_FailedQueries_TotalCount[5m]) > 0
+          labels: { severity: warning }
+          annotations:
+            summary: "Trino queries are failing"
+            runbook: docs/runbooks/service-failures.md

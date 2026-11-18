@@ -1,0 +1,51 @@
+---
+- name: Set hostname to inventory name
+  ansible.builtin.hostname:
+    name: "{{ inventory_hostname }}"
+
+- name: Add all cluster nodes to /etc/hosts
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: ".*\\s{{ item }}$"
+    line: "{{ hostvars[item].private_ip }} {{ item }}"
+  loop: "{{ groups['k8s'] }}"
+
+- name: Disable swap now
+  ansible.builtin.command: swapoff -a
+  changed_when: false
+
+- name: Disable swap permanently
+  ansible.builtin.replace:
+    path: /etc/fstab
+    regexp: '^([^#].*\sswap\s.*)$'
+    replace: '# \1'
+
+- name: Load kernel modules
+  community.general.modprobe:
+    name: "{{ item }}"
+    state: present
+    persistent: present
+  loop:
+    - overlay
+    - br_netfilter
+
+- name: Apply kernel parameters
+  ansible.posix.sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    sysctl_file: /etc/sysctl.d/99-kubernetes.conf
+    reload: true
+  loop: "{{ kernel_params | dict2items }}"
+
+- name: Install base and chaos-tooling packages
+  ansible.builtin.apt:
+    name: "{{ ['apt-transport-https', 'ca-certificates', 'curl', 'gpg', 'chrony'] + chaos_packages }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Keep clocks in sync (recovery timings depend on it)
+  ansible.builtin.service:
+    name: chrony
+    state: started
+    enabled: true

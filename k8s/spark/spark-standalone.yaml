@@ -1,0 +1,130 @@
+# Spark standalone cluster: 1 master + 3 workers (one per node).
+# Native PrometheusServlet sink exposes master/worker metrics.
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: spark-metrics
+  namespace: spark
+data:
+  metrics.properties: |
+    *.sink.prometheusServlet.class=org.apache.spark.metrics.sink.PrometheusServlet
+    *.sink.prometheusServlet.path=/metrics/prometheus
+    master.sink.prometheusServlet.path=/metrics/master/prometheus
+    applications.sink.prometheusServlet.path=/metrics/applications/prometheus
+    master.source.jvm.class=org.apache.spark.metrics.source.JvmSource
+    worker.source.jvm.class=org.apache.spark.metrics.source.JvmSource
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spark-master
+  namespace: spark
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: spark, component: master }
+  template:
+    metadata:
+      labels: { app: spark, component: master }
+    spec:
+      containers:
+        - name: master
+          image: apache/spark:3.5.1
+          command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.master.Master"]
+          env:
+            - name: SPARK_MASTER_HOST
+              value: "0.0.0.0"
+            - name: SPARK_MASTER_OPTS
+              value: >-
+                -Dspark.metrics.conf=/opt/spark/conf-metrics/metrics.properties
+                -Dspark.ui.prometheus.enabled=true
+          ports:
+            - { name: rpc, containerPort: 7077 }
+            - { name: http, containerPort: 8080 }
+          readinessProbe:
+            httpGet: { path: /, port: 8080 }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /, port: 8080 }
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          volumeMounts:
+            - { name: metrics, mountPath: /opt/spark/conf-metrics }
+          resources:
+            requests: { cpu: 250m, memory: 1Gi }
+            limits: { memory: 1Gi }
+      volumes:
+        - name: metrics
+          configMap: { name: spark-metrics }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: spark-master
+  namespace: spark
+  labels: { app: spark, component: master }
+spec:
+  selector: { app: spark, component: master }
+  ports:
+    - { name: rpc, port: 7077, targetPort: 7077 }
+    - { name: http, port: 8080, targetPort: 8080 }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spark-worker
+  namespace: spark
+spec:
+  replicas: 3
+  selector:
+    matchLabels: { app: spark, component: worker }
+  template:
+    metadata:
+      labels: { app: spark, component: worker }
+    spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels: { app: spark, component: worker }
+                topologyKey: kubernetes.io/hostname
+      containers:
+        - name: worker
+          image: apache/spark:3.5.1
+          command:
+            - /opt/spark/bin/spark-class
+            - org.apache.spark.deploy.worker.Worker
+            - spark://spark-master:7077
+          env:
+            - { name: SPARK_WORKER_CORES, value: "2" }
+            - { name: SPARK_WORKER_MEMORY, value: "3g" }
+            - name: SPARK_WORKER_OPTS
+              value: "-Dspark.metrics.conf=/opt/spark/conf-metrics/metrics.properties"
+          ports:
+            - { name: http, containerPort: 8081 }
+          readinessProbe:
+            httpGet: { path: /, port: 8081 }
+            periodSeconds: 5
+          volumeMounts:
+            - { name: metrics, mountPath: /opt/spark/conf-metrics }
+          resources:
+            requests: { cpu: "1", memory: 3584Mi }
+            limits: { memory: 3584Mi }
+      volumes:
+        - name: metrics
+          configMap: { name: spark-metrics }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: spark-worker
+  namespace: spark
+  labels: { app: spark, component: worker }
+spec:
+  clusterIP: None
+  selector: { app: spark, component: worker }
+  ports:
+    - { name: http, port: 8081, targetPort: 8081 }

@@ -1,0 +1,32 @@
+---
+- name: Install containerd
+  ansible.builtin.apt:
+    name: containerd
+    state: present
+
+- name: Create containerd config directory
+  ansible.builtin.file:
+    path: /etc/containerd
+    state: directory
+    mode: "0755"
+
+- name: Generate default containerd config
+  ansible.builtin.shell: containerd config default > /etc/containerd/config.toml
+  args:
+    creates: /etc/containerd/config.toml
+
+- name: Use systemd cgroup driver (required by kubelet)
+  ansible.builtin.replace:
+    path: /etc/containerd/config.toml
+    regexp: 'SystemdCgroup = false'
+    replace: 'SystemdCgroup = true'
+  notify: Restart containerd
+
+- name: Enable containerd
+  ansible.builtin.service:
+    name: containerd
+    state: started
+    enabled: true
+
+- name: Flush handlers so containerd is ready before kubeadm
+  ansible.builtin.meta: flush_handlers

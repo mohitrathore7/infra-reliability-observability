@@ -1,0 +1,31 @@
+# JMX -> Prometheus mapping for the broker metrics used in dashboards and alerts.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kafka-metrics
+  namespace: kafka
+data:
+  kafka-metrics-config.yml: |
+    lowercaseOutputName: true
+    rules:
+      # kafka_server_replicamanager_underreplicatedpartitions
+      - pattern: kafka.server<type=ReplicaManager, name=(\w+)><>Value
+        name: kafka_server_replicamanager_$1
+        type: GAUGE
+      # kafka_controller_kafkacontroller_offlinepartitionscount / activecontrollercount
+      - pattern: kafka.controller<type=KafkaController, name=(\w+)><>Value
+        name: kafka_controller_kafkacontroller_$1
+        type: GAUGE
+      # kafka_server_brokertopicmetrics_messagesin_total / bytesin_total / bytesout_total
+      - pattern: kafka.server<type=BrokerTopicMetrics, name=(MessagesIn|BytesIn|BytesOut)PerSec(?:, topic=(.+))?><>Count
+        name: kafka_server_brokertopicmetrics_$1_total
+        type: COUNTER
+        labels:
+          topic: "$2"
+      # Request latency for produce/fetch
+      - pattern: kafka.network<type=RequestMetrics, name=TotalTimeMs, request=(Produce|FetchConsumer)><>(\d+)thPercentile
+        name: kafka_network_requestmetrics_totaltimems
+        type: GAUGE
+        labels:
+          request: "$1"
+          quantile: "0.$2"

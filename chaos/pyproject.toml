@@ -1,0 +1,16 @@
+[project]
+name = "chaoskit"
+version = "0.1.0"
+description = "Controlled failure injection with recovery-time measurement for Kubernetes clusters"
+requires-python = ">=3.10"
+dependencies = ["PyYAML>=6.0", "requests>=2.31"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

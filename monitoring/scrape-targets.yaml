@@ -1,0 +1,72 @@
+# Scrape configuration for the distributed services.
+---
+# Kafka brokers (Strimzi JMX exporter on port 9404).
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: kafka-brokers
+  namespace: monitoring
+spec:
+  namespaceSelector:
+    matchNames: [kafka]
+  selector:
+    matchExpressions:
+      - key: strimzi.io/kind
+        operator: In
+        values: [Kafka]
+      - key: strimzi.io/name
+        operator: In
+        values: [events-kafka]
+  podMetricsEndpoints:
+    - port: tcp-prometheus
+      path: /metrics
+      interval: 15s
+---
+# Kafka Exporter (consumer-group lag).
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: kafka-exporter
+  namespace: monitoring
+spec:
+  namespaceSelector:
+    matchNames: [kafka]
+  selector:
+    matchLabels:
+      strimzi.io/name: events-kafka-exporter
+  podMetricsEndpoints:
+    - port: tcp-prometheus
+      path: /metrics
+      interval: 15s
+---
+# Spark master (PrometheusServlet).
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: spark-master
+  namespace: monitoring
+spec:
+  namespaceSelector:
+    matchNames: [spark]
+  selector:
+    matchLabels: { app: spark, component: master }
+  endpoints:
+    - port: http
+      path: /metrics/master/prometheus
+      interval: 15s
+---
+# Spark workers.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: spark-workers
+  namespace: monitoring
+spec:
+  namespaceSelector:
+    matchNames: [spark]
+  selector:
+    matchLabels: { app: spark, component: worker }
+  endpoints:
+    - port: http
+      path: /metrics/prometheus
+      interval: 15s

@@ -1,0 +1,60 @@
+# helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+# helm upgrade --install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
+#   -n monitoring -f monitoring/kube-prometheus-stack-values.yaml
+
+prometheus:
+  service:
+    type: NodePort
+    nodePort: 30090
+  prometheusSpec:
+    scrapeInterval: 15s
+    evaluationInterval: 15s
+    retention: 7d
+    # Pick up ServiceMonitors/PodMonitors/Rules from every namespace.
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: local-path
+          accessModes: [ReadWriteOnce]
+          resources:
+            requests:
+              storage: 20Gi
+
+grafana:
+  service:
+    type: NodePort
+    nodePort: 30300
+  adminPassword: ""  # set via --set grafana.adminPassword=... ; never commit it
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      searchNamespace: ALL
+  persistence:
+    enabled: true
+    storageClassName: local-path
+    size: 5Gi
+
+alertmanager:
+  alertmanagerSpec:
+    storage:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: local-path
+          accessModes: [ReadWriteOnce]
+          resources:
+            requests:
+              storage: 2Gi
+
+# kubeadm binds these to localhost by default; skip to avoid permanent "down" targets.
+kubeEtcd:
+  enabled: false
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeProxy:
+  enabled: false

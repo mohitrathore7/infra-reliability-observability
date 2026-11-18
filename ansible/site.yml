@@ -1,0 +1,24 @@
+---
+# Provisions a kubeadm Kubernetes cluster on the nodes created by Terraform.
+#   ansible-playbook site.yml
+
+- name: Prepare all nodes
+  hosts: k8s
+  become: true
+  roles:
+    - common
+    - containerd
+    - kube_packages
+
+- name: Initialise control plane
+  hosts: control_plane
+  become: true
+  roles:
+    - control_plane
+
+- name: Join workers
+  hosts: workers
+  become: true
+  serial: 1
+  roles:
+    - worker

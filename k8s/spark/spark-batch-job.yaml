@@ -1,0 +1,36 @@
+# Recurring Spark batch job that keeps executors busy, so worker loss shows
+# up in running/waiting app metrics and job duration.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: spark-pi-batch
+  namespace: spark
+spec:
+  schedule: "*/5 * * * *"
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: submit
+              image: apache/spark:3.5.1
+              command:
+                - /opt/spark/bin/spark-submit
+                - --master
+                - spark://spark-master:7077
+                - --deploy-mode
+                - client
+                - --conf
+                - spark.executor.memory=1g
+                - --conf
+                - spark.cores.max=4
+                - --class
+                - org.apache.spark.examples.SparkPi
+                - local:///opt/spark/examples/jars/spark-examples_2.12-3.5.1.jar
+                - "2000"
+              resources:
+                requests: { cpu: 250m, memory: 1Gi }
+                limits: { memory: 1536Mi }

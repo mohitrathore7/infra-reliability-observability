@@ -1,0 +1,57 @@
+# Steady producer + consumer so throughput and consumer-lag metrics have a
+# baseline before failures are injected.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: telemetry-producer
+  namespace: kafka
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: telemetry-producer }
+  template:
+    metadata:
+      labels: { app: telemetry-producer }
+    spec:
+      containers:
+        - name: producer
+          image: quay.io/strimzi/kafka:0.41.0-kafka-3.7.0
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              while true; do
+                /opt/kafka/bin/kafka-producer-perf-test.sh \
+                  --topic telemetry --num-records 600000 --record-size 512 \
+                  --throughput 1000 \
+                  --producer-props bootstrap.servers=events-kafka-bootstrap:9092 acks=all
+              done
+          resources:
+            requests: { cpu: 200m, memory: 256Mi }
+            limits: { memory: 512Mi }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: telemetry-consumer
+  namespace: kafka
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: telemetry-consumer }
+  template:
+    metadata:
+      labels: { app: telemetry-consumer }
+    spec:
+      containers:
+        - name: consumer
+          image: quay.io/strimzi/kafka:0.41.0-kafka-3.7.0
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              /opt/kafka/bin/kafka-console-consumer.sh \
+                --bootstrap-server events-kafka-bootstrap:9092 \
+                --topic telemetry --group telemetry-readers > /dev/null
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { memory: 512Mi }

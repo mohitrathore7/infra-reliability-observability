@@ -1,0 +1,55 @@
+name: ci
+
+"on":
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false
+      - run: terraform validate
+
+  ansible:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ansible-core ansible-lint
+      - run: ansible-galaxy collection install -r ansible/requirements.yml
+      - run: ansible-lint ansible/site.yml
+        env:
+          ANSIBLE_CONFIG: ansible/ansible.cfg
+
+  manifests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: pip install yamllint
+      - run: yamllint -c .yamllint.yml k8s monitoring chaos/scenarios.yaml ansible
+
+  chaoskit:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: chaos
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements-dev.txt
+      - run: ruff check .
+      - run: pytest -q
+      - name: Dashboard builds and tracks 12 metrics
+        run: python ../scripts/build_dashboard.py | python -c "import json,sys; assert len(json.load(sys.stdin)['panels']) == 12"
